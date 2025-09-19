@@ -1,0 +1,9 @@
+langchain-ollama
+langchain-chroma
+langchain-community
+langchain-core
+pandas
+speechrecognition
+pyttsx3 
+pyaudio
+langchain
