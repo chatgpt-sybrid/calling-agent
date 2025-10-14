@@ -3,6 +3,9 @@ import pyttsx3
 import threading
 import queue
 import os
+import tempfile
+import time
+import whisper
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain_chroma import Chroma
 from langchain.prompts import PromptTemplate
@@ -20,7 +23,7 @@ def find_client(name_query: str):
     return docs[0].metadata
 
 # --- LLM ---
-llm = OllamaLLM(model="llama3.2", temperature=0.3)
+llm = OllamaLLM(model="llama3.2", temperature=0.1)
 
 full_prompt = PromptTemplate(
     template="""
@@ -47,7 +50,8 @@ full_prompt = PromptTemplate(
 
     **Conversation History:**
     {chat_history}
-    Canvi's next reply:
+    
+    Generate your response (do not include "Canvi:" prefix):
     """,
     input_variables=[
         "client_name",
@@ -73,42 +77,92 @@ recognizer = sr.Recognizer()
 microphone = sr.Microphone()
 speaker = pyttsx3.init()
 speaker_queue = queue.Queue() 
-speaker.setProperty('rate', 110) 
+speaker.setProperty('rate', 200) 
 speaker.setProperty('voice', 'english_us') 
-speaker.setProperty('gender', 'female') 
+speaker.setProperty('gender', 'female')
+
+# Test the speaker
+print("🔊 Testing speaker...")
+speaker.say("Speaker test successful")
+speaker.runAndWait()
+print("✅ Speaker is working!")
+
+# Initialize Whisper model (using base model for good balance of speed/accuracy)
+print("Loading Whisper model...")
+whisper_model = whisper.load_model("base")
+print("Whisper model loaded successfully!") 
 
 def speak_response():
     while True:
         text = speaker_queue.get()
         if text is None: 
             break
-        print("Canvi: Speaking...")
+        print(f"🔊 Speaking: {text}")
         speaker.say(text)
         speaker.runAndWait()
-        print("Canvi: Finished speaking.")
+        print("🔇 Finished speaking")
         speaker_queue.task_done()
 
 speaker_thread = threading.Thread(target=speak_response, daemon=True)
 speaker_thread.start()
 
-def recognize_speech_and_respond():
-    with microphone as source:
-        recognizer.adjust_for_ambient_noise(source)
-        print("Canvi: Listening...")
-        try:
+# Give the speaker thread a moment to start
+import time
+time.sleep(0.5)
+print("✅ Speaker thread started and ready")
+
+def recognize_speech_whisper():
+    """Enhanced speech recognition using Whisper for better accuracy"""
+    try:
+        with microphone as source:
+            recognizer.adjust_for_ambient_noise(source, duration=1)
+            print("🎤 Listening...")
+            
+            # Record audio
             audio = recognizer.listen(source, timeout=30, phrase_time_limit=30)
-            client_reply = recognizer.recognize_google(audio)
-            print(f"Client (Voice): {client_reply}")
-            return client_reply
-        except sr.UnknownValueError:
-            print("Canvi: Could not understand audio, please try again.")
-            return ""
-        except sr.RequestError as e:
-            print(f"Canvi: Speech recognition service error: {e}")
-            return ""
-        except Exception as e:
-            print(f"Canvi: An unexpected error occurred: {e}")
-            return "NO_RESPONSE"
+            
+            # Try Whisper first (more accurate)
+            try:
+                # Save audio to temporary file for Whisper
+                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                tmp_file.write(audio.get_wav_data())
+                tmp_file.close()
+                
+                # Small delay to ensure file is fully written
+                time.sleep(0.1)
+                
+                # Use Whisper to transcribe
+                print("🧠 Processing speech with Whisper...")
+                result = whisper_model.transcribe(tmp_file.name)
+                client_reply = result["text"].strip()
+                
+                # Clean up temp file
+                try:
+                    os.unlink(tmp_file.name)
+                except:
+                    pass  # Ignore cleanup errors
+                
+                if client_reply:
+                    print(f"👤 Client: {client_reply}")
+                    return client_reply
+                else:
+                    return ""
+                        
+            except Exception as whisper_error:
+                print(f"Whisper failed, falling back to Google: {whisper_error}")
+                # Fallback to Google speech recognition
+                client_reply = recognizer.recognize_google(audio)
+                if client_reply:
+                    print(f"👤 Client: {client_reply}")
+                    return client_reply
+                else:
+                    return ""
+                    
+    except sr.WaitTimeoutError:
+        return "NO_RESPONSE"
+    except Exception as e:
+        print(f"Speech recognition error: {e}")
+        return "NO_RESPONSE"
 
 def cold_call_voice(client_meta, new_offer_details):
     """Simulates a cold call conversation with a client using voice."""
@@ -126,26 +180,26 @@ def cold_call_voice(client_meta, new_offer_details):
     }
 
     conversation_history = ""
-    print("\nVoice Cold Call Started (say 'bye' to quit)\n")
+    print(f"\n Calling {client_info['Name']}...")
+    print("=" * 50)
 
     # Initial greeting
     initial_greeting = f"Hello, this is Canvi from Canvas Digital. Hi {client_info['Name']}, how are you doing today?"
+    print(f"🔊 Adding initial greeting to speaker queue: {initial_greeting}")
     speaker_queue.put(initial_greeting)
     conversation_history += f"Canvi: {initial_greeting}\n"
     
     while True:
-        client_reply = recognize_speech_and_respond()
+        client_reply = recognize_speech_whisper()
 
         if client_reply == "NO_RESPONSE":
             no_response_count += 1
             if no_response_count >= max_no_response:
                 response_message = "Sorry, are you there? I can't hear you. I'll end the call now. Goodbye!"
                 speaker_queue.put(response_message)
-                print(f"Canvi: {response_message}")
                 break
             else:                
                 speaker_queue.put("Sorry, are you there? Can you hear me?") 
-                print("Canvi: Sorry, are you there? Can you hear me?")
                 continue 
         else:
             no_response_count = 0
@@ -156,18 +210,34 @@ def cold_call_voice(client_meta, new_offer_details):
 
         conversation_history += f"Client: {client_reply}\n"
         
-        response = llm_stage_reply(client_info, conversation_history, new_offer_details).strip()
-        
-        if "GOODBYE_CALL" in response:
-            speaker_queue.put("Thank you for your time. Goodbye!")
-            break
-        
-        speaker_queue.put(response)
-        conversation_history += f"Canvi: {response}\n"
+        try:
+            response = llm_stage_reply(client_info, conversation_history, new_offer_details)
+            response = response.strip()
+            
+            # Remove "Canvi:" prefix if it exists
+            if response.startswith("Canvi:"):
+                response = response[6:].strip()
+            
+            if not response or response == "":
+                response = "I understand. Let me know if you have any questions about our services."
+            
+            if "GOODBYE_CALL" in response:
+                speaker_queue.put("Thank you for your time. Goodbye!")
+                break
+            
+            # Speak the response
+            print(f"🤖 Canvi: {response}")
+            print(f"🔊 Adding to speaker queue: {response}")
+            speaker_queue.put(response)
+            conversation_history += f"Canvi: {response}\n"
+            
+        except Exception as e:
+            fallback_response = "I apologize, I'm having trouble processing that. Could you please repeat?"
+            speaker_queue.put(fallback_response)
+            conversation_history += f"Canvi: {fallback_response}\n"
 
     speaker_queue.put(None) 
     speaker_thread.join()
-
 
 def cold_call_text(client_meta, new_offer_details):
     """Simulates a cold call conversation with a client."""
@@ -182,9 +252,9 @@ def cold_call_text(client_meta, new_offer_details):
     }
 
     conversation_history = ""
-    print("\nText Cold Call Started (type 'bye' to quit)\n")
+    print(f"\n Chat with {client_info['Name']} started")
+    print("=" * 50)
 
-    # Initial greeting
     initial_greeting = f"Hello, this is Canvi from Canvas Digital. Hi {client_info['Name']}, how are you doing today?"
     print(f"Canvi: {initial_greeting}")
     conversation_history += f"Canvi: {initial_greeting}\n"
@@ -208,23 +278,23 @@ def cold_call_text(client_meta, new_offer_details):
 
 
 def main():
-    print("Canvas Digital Cold Call System")
+    print(" Canvas Digita Sales Agent")
     print("=" * 40)
     
-    query = input("Type the client name to call: ")
+    query = input("👤 Enter client name: ")
     client_meta = find_client(query)
     
     if not client_meta:
         print(" Client not found in records. Please try another name.")
         return
     
-    print("\nSelect call mode:")
-    print("1. Voice Call (with speech)")
-    print("2.  Text Call (typing)")
+    print("\n Call Mode Selection:")
+    print("1. Voice Call (Real-time conversation)")
+    print("2. Text Call (Chat simulation)")
     
     choice = input("Choose option (1 or 2): ").strip()
 
-    new_offer_details = input("Enter details for the new opportunity: ") 
+    new_offer_details = input(" Enter new opportunity details: ") 
     
     if choice == "1":
         try:

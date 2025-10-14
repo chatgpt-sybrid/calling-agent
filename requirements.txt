@@ -8,3 +8,4 @@ pyttsx3
 pyaudio
 langchain
 Pypdf
+openai-whisper
