@@ -14,11 +14,11 @@ faq_file = r"datapdf\Cold Call FAQ.pdf"
 db_path = r"chroma_db"
 
 if not os.path.exists(csv_file):
-    raise FileNotFoundError(f"❌ CSV not found at {csv_file}")
+    raise FileNotFoundError(f"CSV not found at {csv_file}")
 if not os.path.exists(faq_file):
-    raise FileNotFoundError(f"❌ FAQ PDF not found at {faq_file}")
+    raise FileNotFoundError(f"FAQ PDF not found at {faq_file}")
 
-# --- 1. Load CSV ---
+#  Load CSV ---
 df = pd.read_csv(csv_file)
 
 client_documents = []
@@ -36,19 +36,19 @@ for _, row in df.iterrows():
     )
     client_documents.append(doc)
 
-# Load FAQ PDF
+# Loading FAQ PDF
 loader = PyPDFLoader(faq_file)
 faq_documents = loader.load()
 for doc in faq_documents:
     doc.metadata["Type"] = "FAQ"
 
-# Combine all documents
+# Combining all documents
 all_documents = client_documents + faq_documents
 
-# --- 4. Embedding model
+#  Embedding model
 embedding_model = OllamaEmbeddings(model="mxbai-embed-large")
 
-# --- 5. Build Chroma DB ---
+#  Build Chroma DB ---
 vectorstore = Chroma.from_documents(
     all_documents,
     embedding_model,
