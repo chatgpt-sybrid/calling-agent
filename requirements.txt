@@ -9,3 +9,6 @@ pyaudio
 langchain
 Pypdf
 openai-whisper
+fastrtc[stt]>=0.0.19
+kokoro-onnx>=0.4.7
+loguru>=0.7.3
